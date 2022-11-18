@@ -1,0 +1,2 @@
+PKG_LIBS = -lprofiler
+PKG_CXXFLAGS = -O2

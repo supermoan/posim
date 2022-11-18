@@ -1,0 +1,220 @@
+#' Run an IBM simulating movements and population dynamics of harbour porpoises in a customizable landscape
+#' 
+#' This function allows you to to run an individual based simulation model (IBM) for fine-scale movements and population dynamics
+#' of harbour porpoises in a customizable landscape. The landscape may feature gillnets, in which porpoises can get entangled. The
+#' model is an extension and reimplementation of Nabe-Nielsen et al. (2013) and Nabe-Nielsen et al. (2014). The original model was extended to 
+#' add gillnets, and reimplemented in C++ (from NetLogo) to allow for faster execution. Please see these references for a detailed
+#' description of how movements and population dynamics are modeled.
+#' 
+#' @rdname posim
+#' @export posim
+#' @param steps The targeted number of steps to run the simulation. Each step corresponds to 30 minutes. Note that the simulation may terminate before reaching this number of steps if the simulated population goes extinct.
+#' @param N Number of individuals in starting population. This should be specified as as a single integer representing the total initial population size. Alternatively, you can specify an integer vector of length equal to the number of abundance regions used, to control how many individuals are created in each abundance region. See [posim::sasc()] for details on how to specify abundance regions.
+#' @param start The day of the year to start the simulation (e.g. 1-365). By default, the simulation starts on July 1 (yday 181), the first day of a "harbour porpoise year" (most individuals are born in summer).
+#' @param debug Integer. Controls the verbosity of console messages printed while running the simulation. Higher numbers correspond to higher verbosity. Use -1 to disable all messages.
+#' @param follow Integer. Specifies the number of random individuals to follow. Movement and energy data for those individuals will be saved. Use 0 to track ALL individuals (probably not recommended) or -1 to disable tracking altogether. The default is to track 10 individuals.
+#' @param sasc Path to the serialized ASCII file. See [posim::sasc()].
+#' @param fish Path to fishery data file. See Details.
+#' @param effort Path to fishery effort data. See details.
+#' @param catchabilitySmall Catchability of harbour porpoise in small gillnets
+#' @param catchabilityMedium Catchability of harbour porpoise in medium gillnets
+#' @param catchabilityLarge Catchability of harbour porpoise in large gillnets
+#' @param pingerEffect Multiplicative scaling factor for harbour porpoise catchability in gillnets with pingers attached.
+#' @param nFisheryDataSampleSize Integer. Sample size of fishing effort per day. Ignored if fish is NULL. See details.
+#' @param nGillnetTypes Integer. Number of distinct gillnet types, each of which can have different catchability/bycatch risk, soaktime, and length. Ignored if fish is NULL.
+#' @param maxU max food content of cells denoted as food patches.
+#' @param pregnancyProb Numeric. Proportion of mature females that are pregnant.
+#' @param ageOfMaturity Numeric. Controls the (decimal) age when porpoises become mature (able to mate and have calves).
+#' @param maxAge Numeric. Maximum allowable age of porpoises. Individuals die when they reach this age.
+#' @param ageDist Vector containing frequencies of age classes, where the first element corresponds to age class 0-1, the second element corresponds to age class 1-2, etc.
+#' @param sexRatioM2F Numeric. Sex ratio of males to females. Controls the probability that a newly weaned calf is added to the population (if it is female), or if it just "disappears" (if it is male).
+#' @param monthlyEnergyMultiplier Vector of length 12, where each element corresponds to a multiplicative factor for energy use in each month of the year.
+#' @param distEnergyMultiplier Numeric. Energy use per km travelled. Applied to all types of movement.
+#' @param stepEnergyMultiplier Numeric. Constant energy use per 30 min, regardless of activities.
+#' @param withCalfEnergyMultiplier Numeric. Single multiplicative factor for energy use when nursing a calf, e.g. 1.4.
+#' @param minTraversalDepth Numeric. Minimum depth of water that propoises can move through.
+#' @param memoryMax Integer. Controls how far back (in units of time steps) porpoises can remember foraging success. Max 120.
+#' @param dispersalInertia Integer. After this many consecutive days of decreasing energy, the porpoise disperses to another block.
+#' @param meanDispersalDistance Numeric. When dispersing in dispersal mode 1 (targeted dispersal), determines the distance the porpoise moves per step (in units of grid cells).
+#' @param minDispersalDistance Numeric. When choosing a dispersal target, only blocks that are at least this distance from the porpoise's current position are considered. Units are grid cells.
+#' @param maxDispersalDistance Numeric. When choosing a dispersal target, only blocks that are less than this distance from the porpoise's current position are considered. Units are grid cells.
+#' @param minDispersalDistanceToLand Numeric. When dispersing, porpoises try to stay at least this distance away from the coast. Units are grid cells.
+#' @param minDispersalDepth Numeric. Limits the cells that porpoises can use for dispersal to those with at least this water depth. Unit is meters.
+#' @param foodGrowthRate Numeric. This controls the rate at which food in patches regenerates.
+#' @param mMortProb Mortality probability constant.
+#' @param xSurvProb Survival probability constant.
+#' @param CRW_contrib CRW contribution.
+#' @param inertiaConst Inertia constant. Defaults to 0.001.
+#' @param corrLogmov Corr log mov.
+#' @param corrAngle Corr angle.
+#' @param maxLogmov Sets the upper bound on the distance moved per 30 minutes, specified as an exponent of 10, i.e. maxLogmov = 1.18 means porpoises will move up to 10^1.18 ~= 15.1 cell widths (6040 meters)
+#' @param offGridCellsTraversable Logical. Can porpoises move off-grid? 
+#' @param refMemStrength Vector of reference memory. 
+#' @param workMemStrength Vector of working memory.
+#' @param nThread Number of threads to use for tasks that can be parallelized.
+#' 
+#' @details
+#' ## sasc file format
+#' You can use the [posim::sasc()] command to generate a sasc from raster files.
+#' 
+#' 
+#' @return A posim object
+#' 
+#' @examples
+#' # Run simulation on example data (homogenous water world) with 500 individuals for 10 years
+#' \dontrun{
+#' res <- sim(N = 500, steps = 48 * 365 * 10)
+#' 
+#' # plot change in N over time
+#' plot(res)
+#' 
+#' # Try other parameters (again using example data)
+#' # Let's simulate a population of 500 individuals, but record 
+#' # movement data for 5 of them from may (day 121) to august 122 days)
+#' res <- sim(N = 500, start = 121, steps = 122 * 48, follow = 5)
+#' 
+#' # we can have a look at the tracks
+#' plot(res, tracks = TRUE)
+#' 
+#' # if we're particularly interested in one specific individual, we can highlight her
+#' plot(res, tracks = TRUE, highlight = 2)
+#' 
+#' # Here, porpoises can only move in water at least 5 meters deep, and food grows a little faster.
+#' sim(N = 200, steps = 48 * 365 * 10, minTraversableWaterDepth = -5, foodGrowthRate = 0.25)
+#' 
+#' # Run simulation on custom data, and include gillnets
+#' sim(N = 200, steps = 48 * 365, sasc = "my_data.sasc", fish = "my_data_fish")
+#' 
+#' }
+#' @md
+#' @references Nabe-Nielsen, J., Sibly, R. M., Tougaard, J., Teilmann, J., & Sveegaard, S. (2014). Effects of noise and by-catch on a Danish harbour porpoise population. Ecological Modelling, 272, 242-251. \url{https://doi.org/10.1016/j.ecolmodel.2013.09.025}
+#' @references Nabe-Nielsen, J., Tougaard, Teilmann, J., Lucke, K., & Forchhammer, M.C. (2013). How a simple adaptive foraging stratgy can lead to emergent home ranges and increased food intake. Oikos 122:1307-1316. \url{https://doi.org/10.1111/j.1600-0706.2013.00069.x}
+#' 
+
+
+posim <- function(steps = 48, N = 10, start = 181, debug = 0, follow = 10, sasc, fish = NULL, effort = NULL, nFisheryDataSampleSize = 16, 
+                            nGillnetTypes = 3, foodGrowthRate = 0.1, maxU = 1, ageOfMaturity = 3.44, ageDist = c(81, 55, 33, 32, 22, 14, 18, 1, 8, 12, 6, 5, 7, 4, 4, 4, 2, 2, 1, 1), 
+                            monthlyEnergyMultiplier = c(1, 1, 1, 1.15, 1.3, 1.3, 1,3, 1.15, 1, 1, 1), withCalfEnergyMultiplier = 1.4, 
+                            distEnergyMultiplier = 0.20, stepEnergyMultiplier = 4.5, mMortProb = 1.0,  xSurvProb = 0.4, pregnancyProb = 0.68, 
+                            maxAge = 30, sexRatioM2F = 0.5, memoryMax = 120, minTraversableWaterDepth = -1, meanDispersalDistance = 4, 
+                            minDispersalDistance = 250, maxDispersalDistance = 1000, minDispersalDepth = -4, minDispersalDistanceToLand = 5, 
+                            CRW_contrib = -9999, inertiaConst = 0.001, corrLogmov = 0.94, corrAngle = 0.26, m = 0.74, maxLogmov = 1.18, 
+                            offGridCellsTraversable = FALSE, nThread = 1,
+                            
+                            catchabilitySmall = 0.000500, 
+                            catchabilityMedium = 0.001250,
+                            catchabilityLarge = 0.001500,
+                            pingerEffect = 0.5,
+                            dispersalInertia = 10,
+                
+                            interaction_probability = c(1, 0.9994, 0.9978, 0.995, 0.9912, 0.9862, 0.9802, 0.9731, 0.9651, 
+                                0.956, 0.946, 0.935, 0.9231, 0.9104, 0.8968, 0.8825, 0.8674, 0.8517, 0.8353, 0.8183, 0.8007, 
+                                0.7827, 0.7642, 0.7454, 0.7261, 0.7066, 0.6869, 0.667, 0.6469, 0.6267, 0.6065, 0.5863, 0.5662, 
+                                0.5461, 0.5261, 0.5063, 0.4868, 0.4674, 0.4483, 0.4296, 0.4111, 0.393, 0.3753, 0.358, 0.3411, 
+                                0.3247, 0.3086, 0.2931, 0.278, 0.2635, 0.2494, 0.2357, 0.2226, 0.21, 0.1979, 0.1863, 0.1751,
+                                0.1645, 0.1543, 0.1446, 0.1353, 0.1265, 0.1182, 0.1103, 0.1027, 0.0956, 0.0889, 0.0826, 0.0766,
+                                0.071, 0.0657, 0.0608, 0.0561, 0.0518, 0.0477, 0.0439, 0.0404, 0.0371, 0.034, 0.0312, 0.0286, 
+                                0.0261, 0.0239, 0.0218, 0.0198, 0.0181, 0.0164, 0.0149, 0.0135, 0.0123, 0.0111, 0.01, 0.0091, 
+                                0.0082, 0.0074, 0.0066, 0.006, 0.0054, 0.0048, 0.0043, 0.0039, 0.0035, 0.0031, 0.0028, 0.0025, 
+                                0.0022, 0.0019, 0.0017, 0.0015, 0.0014, 0.0012, 0.0011, 0.0009, 0.0008, 0.0007, 0.0006, 0.0006, 
+                                0.0005, 0.0004, 0.0004, 0.0003, 0.0003, 0.0003, 0.0002, 0.0002, 0.0002, 0.0001, 0.0001, 0.0001, 
+                                0.0001, 0.0001, 0.0001, 0.0001, 0.0001, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), # per 0.5 meter up to 50 meters
+                
+                            refMemStrength  = c(0.9990, 0.9989, 0.9988, 0.9987, 0.9985, 0.9984, 0.9982, 0.9981, 0.9979, 0.9976, 0.9974, 0.9972, 
+                            0.9969, 0.9966, 0.9962, 0.9958, 0.9954, 0.9950, 0.9945, 0.9939, 0.9933, 0.9926, 0.9919, 0.9911, 
+                            0.9902, 0.9893, 0.9882, 0.9870, 0.9858, 0.9843, 0.9828, 0.9811, 0.9793, 0.9772, 0.9750, 0.9726, 
+                            0.9699, 0.9670, 0.9638, 0.9603, 0.9565, 0.9523, 0.9478, 0.9428, 0.9375, 0.9316, 0.9252, 0.9183,
+                            0.9108, 0.9027, 0.8939, 0.8844, 0.8742, 0.8632, 0.8514, 0.8387, 0.8252, 0.8108, 0.7954, 0.7792, 
+                            0.7619, 0.7438, 0.7248, 0.7048, 0.6840, 0.6624, 0.6400, 0.6170, 0.5934, 0.5692, 0.5447, 0.5199, 
+                            0.4949, 0.4699, 0.4450, 0.4203, 0.3960, 0.3721, 0.3487, 0.3260, 0.3040, 0.2828, 0.2626, 0.2432, 
+                            0.2248, 0.2074, 0.1909, 0.1755, 0.1610, 0.1475, 0.1349, 0.1233, 0.1125, 0.1025, 0.0933, 0.0848, 
+                            0.0771, 0.0699, 0.0634, 0.0575, 0.0521, 0.0471, 0.0426, 0.0386, 0.0349, 0.0315, 0.0284, 0.0257, 
+                            0.0232, 0.0209, 0.0189, 0.0170, 0.0153, 0.0138, 0.0125, 0.0112, 0.0101, 0.0091, 0.0082, 0.0074),
+                            
+                            workMemStrength = c(0.9990, 0.9988, 0.9986, 0.9983, 0.9979, 0.9975, 0.9970, 0.9964, 0.9957, 0.9949, 0.9938, 0.9926, 
+                            0.9911, 0.9894, 0.9873, 0.9848, 0.9818, 0.9782, 0.9739, 0.9689, 0.9628, 0.9557, 0.9472, 0.9372, 
+                            0.9254, 0.9116, 0.8955, 0.8768, 0.8552, 0.8304, 0.8022, 0.7705, 0.7351, 0.6962, 0.6539, 0.6086, 
+                            0.5610, 0.5117, 0.4617, 0.4120, 0.3636, 0.3173, 0.2740, 0.2342, 0.1983, 0.1665, 0.1388, 0.1149, 
+                            0.0945, 0.0774, 0.0631, 0.0513, 0.0416, 0.0336, 0.0271, 0.0218, 0.0176, 0.0141, 0.0113, 0.0091, 
+                            0.0073, 0.0058, 0.0047, 0.0037, 0.0030, 0.0024, 0.0019, 0.0015, 0.0012, 0.0010, 0.0008, 0.0006, 
+                            0.0005, 0.0004, 0.0003, 0.0003, 0.0002, 0.0002, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001, 0.0000, 
+                            0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 
+                            0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 
+                            0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000)) {
+ 
+    conf <- as.list(environment())
+    
+    if (length(conf$follow) != 1 || !is.numeric(conf$follow)) {
+        stop("follow must be an integer of length 1")
+    }
+    
+    if (conf$follow > sum(conf$N)) {
+        stop("follow must be <= N (", sum(conf$N), ")")
+    }
+    
+    # if follow < 0, disable following    
+    # if follow = 0, then follow everyone
+    # if follow > 0, take a sample of size follow from initial population and follow those
+    if (conf$follow > 0) {
+        conf$follow <- sample(seq(1, sum(conf$N)), size = conf$follow)
+    } else if (conf$follow != 0) {
+        conf$follow = -1
+    }
+    
+    if (length(conf$start) != 1 || !conf$start %in% 1:365) {
+        stop("start must be length 1, and one of 1:365")
+    }
+    
+    files_to_check <- conf$sasc
+    if (!is.null(conf$fish)) { 
+        if (is.null(conf$effort)) {
+            stop("fish specified, but not effort. Please specify effort. See ?sim for more information")
+        }
+        
+        files_to_check <- c(files_to_check, conf$fish, conf$effort) 
+    }
+    
+    for (f in files_to_check) {
+        if (!file.exists(f)) {
+            stop("File ", f, " does not exist!")
+        }
+    }
+    
+    conf$header <- data.table::fread(conf$sasc, nrows = 1, 
+                                  col.names = c("xmax", "ymax", "nabund", "nfish", "nblock", "ntrav", "block_size", "nfood", "maxent1", "maxent2", "maxent3", "maxent4"))
+    
+    dat = data.table::fread(conf$sasc, select = c(1, 5, 3, 6), showProgress=FALSE, skip = 1,
+                            col.names = c("bathy", "block", "survey","food"), nThread = 3)
+    dat[bathy == 1, bathy := NA]
+    dat[block == -1, block := NA]
+    dat[survey == -1, survey := NA]
+    #nsurv = length(unique(dat[[3]])) - any(dat[[3]] == -1)
+    
+    if (!length(conf$N) %in% c(1, conf$header$nabund)) {
+        stop("N must be either length 1 or ", nsurv);
+    }
+
+    if (conf$dispersalInertia > 10) {
+        stop("dispersalInertia cannot be > 10")
+    }
+    
+    #rast <- raster::subs(raster::raster(xmn = 0, xmx = conf$header$xmax, ymn = 0, ymx = conf$header$ymax, res=c(1,1), vals = dat[[1]]), y = data.frame(1, NA), subsWithNA=FALSE)
+    #dat <- data.frame()
+    rast <- raster::raster(xmn = 0, xmx = conf$header$xmax, ymn = 0, ymx = conf$header$ymax, res = c(1,1), vals = dat$bathy)
+    x <- do_sim(list(conf = conf))
+    
+    methods::new("posim", 
+                 conf = conf, 
+                 filename = conf$sasc, 
+                 data = dat,
+                 raster = rast,
+                 gillnets = x$result$gillnets,
+                 bycatch = x$result$bycatch,
+                 tracks = x$result$porps,
+                 abundance = x$result$N,
+                 block = x$result$block,
+                 structure = x$result$structure
+    )
+}
